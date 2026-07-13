@@ -42,8 +42,33 @@ in
       # Move libraries out of `lib/swift/`, so ld-wrapper will find them automatically.
       mv -v "''${!outputLib}/lib/swift/${swiftPlatform}"/*${libraryExtension} "''${!outputLib}/lib"
 
+      # Copy Swift compiler libraries needed by LLDB into $dev. The following list should match the ones found at:
+      # - https://github.com/swiftlang/llvm-project/blob/swift-$swiftVersion-RELEASE/lldb/source/Plugins/ExpressionParser/Swift/CMakeLists.txt
+      # - https://github.com/swiftlang/llvm-project/blob/swift-$swiftVersion-RELEASE/lldb/source/Plugins/Language/Swift/CMakeLists.txt
+      # - https://github.com/swiftlang/llvm-project/blob/swift-$swiftVersion-RELEASE/lldb/source/Plugins/LanguageRuntime/Swift/CMakeLists.txt
+      # - https://github.com/swiftlang/llvm-project/blob/swift-$swiftVersion-RELEASE/lldb/source/Symbol/CMakeLists.txt
+      declare -a swiftLibs=(
+        swiftAST
+        swiftASTSectionImporter
+        swiftBasic
+        swiftClangImporter
+        swiftFrontend
+        swiftIDE
+        swiftParse
+        swiftRemoteAST
+        swiftRemoteInspection
+        swiftSIL
+        swiftSILOptimizer
+        swiftSerialization
+      )
+      # This isn’t built normally for the stdlib, but LLDB needs it.
+      ninja libswiftASTSectionImporter${stdenv.hostPlatform.extensions.staticLibrary}
+      for swiftLib in "''${swiftLibs[@]}"; do
+        cp -v lib/lib$swiftLib${stdenv.hostPlatform.extensions.staticLibrary} "''${!outputDev}/lib"
+      done
+
       # Install C++ interop libraries and headers
-      cp -v lib/swift/${swiftPlatform}/libswiftCxx*.a "''${!outputDev}/lib"
+      cp -v lib/swift/${swiftPlatform}/libswiftCxx*${stdenv.hostPlatform.extensions.staticLibrary} "''${!outputDev}/lib"
       cp -rv lib/swift/${swiftPlatform}/Cxx*.swiftmodule "''${!outputDev}/lib/swift/${swiftPlatform}"
 
       mkdir -p "''${!outputDev}/include/swiftToCxx"

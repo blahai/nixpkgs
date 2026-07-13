@@ -7,26 +7,26 @@
   fetchFromGitHub,
   fetchpatch2,
   libedit,
-  llvm_libtool,
   libffi,
   libuuid,
   libxml2,
   llvmPackages,
+  llvm_libtool,
   ninja_1_11,
   overrideCC,
   perl,
   python3,
   replaceVars,
+  srcOnly,
   stdenv,
   stdlib,
+  swift-bootstrap ? null,
   swift-cmark,
   swift-corelibs-libdispatch,
   swift-syntax,
   swift_release,
-  swift-bootstrap ? null,
   sysroot,
   xcbuild,
-  srcOnly,
   xz,
   zlib,
   zstd,
@@ -63,6 +63,7 @@
 
 let
   getBuildHost = lib.mapAttrs (_: pkg: pkg.__spliced.buildHost or pkg);
+  getBuildTarget = lib.mapAttrs (_: pkg: pkg.__spliced.buildTarget or pkg);
   getHostTarget = lib.mapAttrs (_: pkg: pkg.__spliced.hostTarget or pkg);
 
   # SDK versions past 14.x don’t work with the c++-based bootstrap compiler due to unconditionally exposing macros.
@@ -72,6 +73,7 @@ let
   propagated-sdk = if bootstrapStage > 0 then apple-sdk_26 else apple-sdk_14;
 
   buildHostPackages = getBuildHost args;
+  buildTargetPackages = getBuildTarget args;
   hostTargetPackages = getHostTarget args;
 
   swift-bootstrap =
@@ -82,14 +84,17 @@ let
 
   swift-driver = swift-bootstrap.swift-driver or null;
 
+  nativeTools = {
+    inherit (buildTargetPackages.llvmPackages)
+      clang
+      llvm
+      ;
+  };
+
   inherit (buildHostPackages.llvmPackages)
     clang
     clang-unwrapped
-    llvm
     ;
-
-  # Get libc++ from the sysroot. Even if they’re the same headers, having them in multiple places breaks things.
-#  clang = buildHostPackages.llvmPackages.clang.override { libcxx = null; };
 
   inherit (hostTargetPackages)
     stdlib
@@ -155,15 +160,8 @@ let
       stdenv
       ;
   };
-#
-#  buildSysroot = hostTargetPackages.sysroot.override { apple-sdk = build-sdk; };
-#  propagatedSysroot = hostTargetPackages.sysroot.override { apple-sdk = propagated-sdk; };
-#
-#  stdenv' = (overrideCC stdenv (stdenv.cc.override { libcxx = null; })).override {
-#    extraBuildInputs = [ buildSysroot ];
-#    allowedRequisites = null;
-#  };
 in
+
 stdenv.mkDerivation (finalAttrs: {
   pname =
     "swiftc"
@@ -207,6 +205,10 @@ stdenv.mkDerivation (finalAttrs: {
     })
     # Use libdispatch from nixpkgs instead of building it in-tree
     ./patches/0006-use-nixpkgs-libdispatch.patch
+    # The Swift JIT needs help finding dylibs when they are linked into the toolchain at `$out/lib`.
+    (replaceVars ./patches/0007-Help-Swift-JIT-find-the-separate-stdlib-and-framewor.patch {
+      swiftPlatform = stdenv.hostPlatform.swift.platform;
+    })
     # Fix missing <cstdint> when building against libstdc++ 15
     (fetchpatch2 {
       url = "https://github.com/swiftlang/swift/commit/a5c727125e952839c373fe47e9f9e359db3d4d38.patch";
@@ -216,23 +218,18 @@ stdenv.mkDerivation (finalAttrs: {
   ++ lib.optionals (bootstrapStage == 1) [
     # Stage 1 doesn’t have a compiler that supports _StringProcessing.
     # This isn’t a problem on Darwin, but it fails on Linux.
-    ./patches/0007-Remove-dependency-on-_StringProcessing-during-stage-.patch
+    ./patches/0008-Remove-dependency-on-_StringProcessing-during-stage-.patch
   ]
   ++ lib.optionals (bootstrapStage < 2) [
     # Revert optimizer changes that cause the C++-based bootstrap compiler to be unable to compile functions with
     # infinite loops that return from the loop. This doesn’t affect the later stages, so it’s applied conditionally.
     # https://github.com/swiftlang/swift/pull/79186
-    ./patches/0008-revert-optimizer-changes.patch
+    ./patches/0009-revert-optimizer-changes.patch
     # Work around a compiler crash by partially reverting https://github.com/swiftlang/swift/pull/80920.
-    ./patches/0009-siloptimizer-bootstrap-workaround.patch
+    ./patches/0010-siloptimizer-bootstrap-workaround.patch
   ];
 
   postPatch = ''
-    # Need to reference $lib, so this can’t be substituted by `replaceVars`. The bootstrap compilers use their own
-    # stdlib, but the final compiler uses the separately built one.
-    # substituteInPlace lib/Frontend/CompilerInvocation.cpp \
-    #   --replace-fail '@lib@' ${if stdlib != null then lib.getLib stdlib else ''"''${!outputLib}"''}
-
     # Swift doesn’t really _need_ LLVM’s build folder. It only needs to find a built LLVM, which we can provide.
     substituteInPlace cmake/modules/SwiftSharedCMakeConfig.cmake \
       --replace-fail "precondition_translate_flag(LLVM_BUILD_LIBRARY_DIR LLVM_LIBRARY_DIR)" ""
@@ -277,7 +274,8 @@ stdenv.mkDerivation (finalAttrs: {
   dontFixCmake = true;
 
   cmakeFlags = [
-    (lib.cmakeFeature "BOOTSTRAPPING_MODE" "HOSTTOOLS") # "BOOTSTRAPPING${lib.optionalString stdenv.hostPlatform.isDarwin "-WITH-HOSTLIBS"}")
+    # The bootstrap is managed via Nix instead of upstream’s bootstrap-specific bootstrapping modes.
+    (lib.cmakeFeature "BOOTSTRAPPING_MODE" "HOSTTOOLS")
     (lib.cmakeOptionType "list" "SWIFT_INSTALL_COMPONENTS" (lib.concatStringsSep ";" swiftComponents'))
     # Needs to be disabled in stage 0 to enable the C++ bootstrap.
     (lib.cmakeBool "SWIFT_ENABLE_SWIFT_IN_SWIFT" (bootstrapStage > 0))
@@ -285,8 +283,8 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.cmakeFeature "CMAKE_INSTALL_NAME_DIR" "${placeholder "out"}/lib/swift/host")
     # Make Swift use Clang from nixpkgs instead of building its own.
     (lib.cmakeBool "SWIFT_PREBUILT_CLANG" true)
-    (lib.cmakeFeature "SWIFT_NATIVE_CLANG_TOOLS_PATH" "${lib.getBin clang}/bin")
-    (lib.cmakeFeature "SWIFT_NATIVE_LLVM_TOOLS_PATH" "${lib.getBin llvm}/bin")
+    (lib.cmakeFeature "SWIFT_NATIVE_CLANG_TOOLS_PATH" "${lib.getBin nativeTools.clang}/bin")
+    (lib.cmakeFeature "SWIFT_NATIVE_LLVM_TOOLS_PATH" "${lib.getBin nativeTools.llvm}/bin")
     # Swift expects to find these relative to `$src`, but it only actually needs their final build products.
     # Instead of being built in the Swift derivation, they’re built separately. This tells CMake how to find them.
     (lib.cmakeFeature "Clang_DIR" "${lib.getDev libclang}/lib/cmake/clang")
@@ -354,27 +352,14 @@ stdenv.mkDerivation (finalAttrs: {
       appendToVar cmakeFlags "-DSWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE:PATH=$NIX_BUILD_TOP/swift-syntax"
     '';
 
-  #  postConfigure =
-  #    # Link the final compiler against the separate stdlib instead of building it with the compiler.
-  #    lib.optionalString (stdlib != null) ''
-  #      stdlibDir=lib/swift/${stdenv.hostPlatform.swift.platform}
-  #      mkdir -p "$stdlibDir"
-  #      for dylib in ${lib.escapeShellArg (lib.getLib stdlib)}/lib/*; do
-  #        ln -s "$dylib" "$stdlibDir/$(basename "$dylib")"
-  #      done
-  #
-  #      for module in ${lib.escapeShellArg (lib.getDev stdlib)}/lib/swift/${stdenv.hostPlatform.swift.platform}/*; do
-  #        ln -s "$module" "$stdlibDir/$(basename "$module")"
-  #      done
-  #    '';
+  postConfigure = ''
+    # Make sure `swift` can locate the C and C++ standard library relative to `swift` binary in `bin`.
+    ln -s ${lib.escapeShellArg (lib.getExe' nativeTools.clang "clang")} bin/clang
+  '';
 
   strictDeps = true;
 
   ninjaFlags = swiftComponents';
-  #  ninjaFlags = lib.optionals (bootstrapStage >= 1) [
-  #    "all"
-  #    "swift-syntax-lib" # `swift-syntax-lib` doesn’t seem to be included in the `all` target for some reason.
-  #  ];
 
   nativeBuildInputs = [
     cmake
@@ -458,18 +443,16 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   # Will effectively be `buildInputs` when swift is put in `nativeBuildInputs`.
-#  depsTargetTargetPropagated = [ propagatedSysroot ];
   depsTargetTargetPropagated = lib.optionals stdenv.hostPlatform.isDarwin [ propagated-sdk ];
 
   __structuredAttrs = true;
 
   passthru.supportsMacros = bootstrapStage > 1;
 
-  #  passthru.sysroot = callPackage ./sysroot.nix { apple-sdk = propagated-sdk; };
-
   meta = {
     description = "Swift Programming Language";
     homepage = "https://github.com/swiftlang/swift";
+    mainProgram = "swiftc";
     platforms = lib.platforms.darwin ++ lib.platforms.linux ++ lib.platforms.windows;
     badPlatforms = [ lib.systems.inspect.patterns.is32bit ];
     license = lib.licenses.asl20;

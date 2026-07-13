@@ -1,33 +1,34 @@
 {
   lib,
+  llvmPackages,
+  llvmPackages_current,
+  patchelf,
   stdenv,
   stdenvNoCC,
   stdlib,
-  symlinkJoin,
-  swift-corelibs-xctest,
-  swift-driver,
-  swift-testing,
   swift-collections,
   swift-corelibs-foundation,
   swift-corelibs-libdispatch,
-  swift-foundation-icu,
+  swift-corelibs-xctest,
+  swift-driver,
   swift-foundation,
-  swift_release,
+  swift-foundation-icu,
+  swift-testing,
   swiftc,
+  symlinkJoin,
+  swift_release,
 
   # Tests
   test-cxx-interop,
   test-foundation-macros,
   test-swift-differentiation,
   test-swift-testing,
-
-  # Required by the setup-hook
-  llvmPackages_current,
-  patchelf,
+  test-swift-scripting,
 }@args:
 
 let
   getBuildHost = lib.mapAttrs (_: pkg: pkg.__spliced.buildHost or pkg);
+  getBuildTarget = lib.mapAttrs (_: pkg: pkg.__spliced.buildTarget or pkg);
   getHostTarget = lib.mapAttrs (_: pkg: pkg.__spliced.hostTarget or pkg);
 
   buildHostPackages = getBuildHost args;
@@ -35,15 +36,15 @@ let
 
   includeTesting = swiftc.supportsMacros && swift-testing != null;
 
-  swift-foundation-macros = stdenvNoCC.mkDerivation {
-    pname = "swift-foundation-macros";
-    version = lib.getVersion swift-foundation;
-
-    buildCommand = ''
-      mkdir -p "$out/lib/swift/host/plugins"
-      ln -s ${lib.escapeShellArg hostTargetPackages.swift-foundation.dev}/lib/swift/host/plugins/libFoundationMacros${stdenv.hostPlatform.extensions.sharedLibrary} "$out/lib/swift/host/plugins"
-    '';
-  };
+#  swift-foundation-macros = stdenvNoCC.mkDerivation {
+#    pname = "swift-foundation-macros";
+#    version = lib.getVersion swift-foundation;
+#
+#    buildCommand = ''
+#      mkdir -p "$out/lib/swift/host/plugins"
+#      ln -s ${lib.escapeShellArg hostTargetPackages.swift-foundation.dev}/lib/swift/host/plugins/libFoundationMacros${stdenv.hostPlatform.extensions.sharedLibrary} "$out/lib/swift/host/plugins"
+#    '';
+#  };
 
   # This makes sure that linking to `libdispatch.so` and `libBlocksRuntime.so` does not pull in previous stages
   # of the bootstrap toolchain.
@@ -57,6 +58,7 @@ let
     name = "swift" + lib.removePrefix "swiftc" (lib.getName swiftc) + "-${swift_release}-out";
     paths = [
       buildHostPackages.swiftc.out
+#      buildHostPackages.llvmPackages.lldb.out
       hostTargetPackages.swiftc.dev
     ]
     ++ lib.optionals includeTesting [
@@ -183,6 +185,9 @@ stdenv.mkDerivation (finalAttrs: {
     # Make writable temporarily to allow for the fixups below to be made to the outputs.
     chmod -R u+w "$out/bin" "$out/lib" "$out/nix-support"
 
+    # Swift expects to find Clang next to it.
+    ln -s ${lib.escapeShellArg (lib.getExe' (getBuildTarget args).llvmPackages_current.clang "clang")} "$out/bin/clang"
+
     # `swift-frontend` expects to find everything relative to its location after resolving symlinks.
     # Also copy `swift-driver` assuming it does similar.
     for exe in swift-driver swift-frontend; do
@@ -235,7 +240,7 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   passthru.tests = {
-    inherit test-cxx-interop test-foundation-macros test-swift-differentiation;
+    inherit test-cxx-interop test-foundation-macros test-swift-differentiation test-swift-scripting;
   }
   // lib.optionalAttrs (!stdenv.hostPlatform.isDarwin) {
     inherit test-swift-testing;
