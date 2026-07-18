@@ -30,7 +30,6 @@
   xz,
   zlib,
   zstd,
-
   # This matches _SWIFT_DEFAULT_COMPONENTS, with specific components disabled.
   swiftComponents ? [
     "autolink-driver"
@@ -60,7 +59,6 @@
     "swift-remote-mirror-headers"
   ],
 }@args:
-
 let
   getBuildHost = lib.mapAttrs (_: pkg: pkg.__spliced.buildHost or pkg);
   getBuildTarget = lib.mapAttrs (_: pkg: pkg.__spliced.buildTarget or pkg);
@@ -98,10 +96,8 @@ let
 
   inherit (hostTargetPackages)
     stdlib
-
     swift-cmark
     swift-corelibs-libdispatch
-
     xz
     zlib
     zstd
@@ -161,7 +157,6 @@ let
       ;
   };
 in
-
 stdenv.mkDerivation (finalAttrs: {
   pname =
     "swiftc"
@@ -213,6 +208,11 @@ stdenv.mkDerivation (finalAttrs: {
     (fetchpatch2 {
       url = "https://github.com/swiftlang/swift/commit/a5c727125e952839c373fe47e9f9e359db3d4d38.patch";
       hash = "sha256-004zzB93Kr/kghQCxJ9gFDkWksvtML0ZDsV9d+tEKq0=";
+    })
+    # Fix missing <cmath> modulemap when building against libstdc++
+    (fetchpatch2 {
+      url = "https://github.com/swiftlang/swift/commit/08231096a797b828d06d176542050edc250337f9.patch";
+      hash = "sha256-VnVEDBVSASWRNC/8aaLjOGJZFD2IqiaHW6wJOjHnHqY=";
     })
   ]
   ++ lib.optionals (bootstrapStage == 1) [
