@@ -146,6 +146,10 @@ stdenv.mkDerivation (finalAttrs: {
         # Fails when built on non-nix FreeBSD
         # https://github.com/libuv/libuv/issues/4606
         "fs_event_watch_delete_dir"
+        # Fails when built on non-nix FreeBSD
+        # no issue yet
+        "poll_nested_kqueue"
+
       ];
       tdRegexp = lib.concatStringsSep "\\|" toDisable;
     in
